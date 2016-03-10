@@ -37,6 +37,24 @@ GstElement *decodebin;
 GstElement *v_conv, *v_queue, *v_sink;
 GstElement *a_conv, *a_queue, *a_sink;
 
+static GstPadProbeReturn
+set_dvbsrc_to_null_and_change_uri (GstPad * pad, GstPadProbeInfo * info,
+    gpointer user_data)
+{
+  const gchar *new_uri = user_data;
+  GError *error = NULL;
+
+  gst_element_set_state (dvbsrc, GST_STATE_NULL);
+  if (!gst_uri_handler_set_uri (GST_URI_HANDLER (dvbsrc), new_uri, &error)) {
+    g_print ("Failed to set uri: %d %d: %s\n", error->domain, error->code, error->message);
+    g_clear_error (&error);
+  }
+  g_print ("Requesting retuning\n");
+  gst_element_set_state (dvbsrc, GST_STATE_PLAYING);
+
+  return GST_PAD_PROBE_REMOVE;
+}
+
 static gboolean
 update_uri (GstElement * dvbsrc)
 {
@@ -65,13 +83,15 @@ update_uri (GstElement * dvbsrc)
 #else
 
   /* Retune option two: set dvbsrc to null, change uri, set to playing */
-#if 0
-  gst_element_set_state (dvbsrc, GST_STATE_NULL);
-  if (!gst_uri_handler_set_uri (GST_URI_HANDLER (dvbsrc), new_uri, &error)) {
-    g_print ("Failed to set uri: %d %d: %s\n", error->domain, error->code, error->message);
+#if 1
+  {
+    GstPad *pad;
+
+    pad = gst_element_get_static_pad (dvbsrc, "src");
+    gst_pad_add_probe (pad, GST_PAD_PROBE_TYPE_IDLE,
+        set_dvbsrc_to_null_and_change_uri, (gpointer) new_uri, NULL);
+    gst_object_unref (pad);
   }
-  g_print ("Requesting retuning\n");
-  gst_element_set_state (dvbsrc, GST_STATE_PLAYING);
 #else
 
   /* Retune option three: change the uri and call the "tune" action */
