@@ -17,7 +17,7 @@
 
 /*
  * Test application to do retuning to different channels of DVB streams.
- * It will move to the next stream every 10s
+ * It will move to the next stream every few seconds
  *
  * Build: libtool --mode=link gcc dvb-retune.c -o dvb-retune `pkg-config --cflags --libs gstreamer`
  *
@@ -52,14 +52,38 @@ update_uri (GstElement * dvbsrc)
   if (index >= 2)
     index = 0;
   g_print ("Changing channel to: %s\n", new_uri);
+
+  /* Retune option one: set the pipeline to null, change uri, set to playing */
+#if 1
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+  if (!gst_uri_handler_set_uri (GST_URI_HANDLER (dvbsrc), new_uri, &error)) {
+    g_print ("Failed to set uri: %d %d: %s\n", error->domain, error->code, error->message);
+  }
+  g_print ("Requesting retuning\n");
+  gst_element_set_state (pipeline, GST_STATE_PLAYING);
+  g_print ("Requested retuning\n");
+#else
+
+  /* Retune option two: set dvbsrc to null, change uri, set to playing */
+#if 0
   gst_element_set_state (dvbsrc, GST_STATE_NULL);
   if (!gst_uri_handler_set_uri (GST_URI_HANDLER (dvbsrc), new_uri, &error)) {
     g_print ("Failed to set uri: %d %d: %s\n", error->domain, error->code, error->message);
   }
   g_print ("Requesting retuning\n");
   gst_element_set_state (dvbsrc, GST_STATE_PLAYING);
-//  g_signal_emit_by_name (dvbsrc, "tune", NULL);
+#else
+
+  /* Retune option three: change the uri and call the "tune" action */
+  if (!gst_uri_handler_set_uri (GST_URI_HANDLER (dvbsrc), new_uri, &error)) {
+    g_print ("Failed to set uri: %d %d: %s\n", error->domain, error->code, error->message);
+  }
+  g_print ("Requesting retuning\n");
+  g_signal_emit_by_name (dvbsrc, "tune", NULL);
   g_print ("Requested retuning\n");
+
+#endif
+#endif
 
   return G_SOURCE_CONTINUE;
 }
@@ -76,7 +100,6 @@ cb_newpad (GstElement *decodebin,
   /* only care about video for now */
   caps = gst_pad_query_caps (pad, NULL);
   str = gst_caps_get_structure (caps, 0);
-  g_print ("Pad added: %s\n", gst_structure_to_string (str));
   if (g_strstr_len (gst_structure_get_name (str), -1, "video")) {
     out_pad = gst_element_get_static_pad (v_queue, "sink");
   } else if (g_strstr_len (gst_structure_get_name (str), -1, "audio")) {
@@ -96,9 +119,38 @@ cb_newpad (GstElement *decodebin,
   g_object_unref (out_pad);
 }
 
+static gboolean
+bus_message_handler (GstBus * bus, GstMessage * message, gpointer udata)
+{
+  switch (GST_MESSAGE_TYPE (message)) {
+    case GST_MESSAGE_ERROR:{
+      GError *err = NULL;
+      gchar *dbg_info = NULL;
+
+      gst_message_parse_error (message, &err, &dbg_info);
+      g_printerr ("ERROR from element %s: %s\n",
+         GST_OBJECT_NAME (message->src), err->message);
+      g_printerr ("Debugging info: %s\n", (dbg_info) ? dbg_info : "none");
+      g_error_free (err);
+      g_free (dbg_info);
+      g_main_loop_quit (loop);
+      break;
+    }
+    case GST_MESSAGE_EOS:{
+      g_main_loop_quit (loop);
+      g_print ("EOS.\n");
+    }
+    default:
+      break;
+  }
+
+  return TRUE;
+}
+
 int main()
 {
   GstStateChangeReturn ret;
+  GstBus *bus;
 
   gst_init (NULL, NULL);
   loop = g_main_loop_new (NULL, FALSE);
@@ -135,16 +187,21 @@ int main()
   g_signal_connect (decodebin, "pad-added", G_CALLBACK (cb_newpad), NULL);
   update_uri (dvbsrc);
 
+  bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline));
+  gst_bus_add_watch (bus, bus_message_handler, NULL);
+
   ret = gst_element_set_state (pipeline, GST_STATE_PLAYING);
   if (ret == GST_STATE_CHANGE_FAILURE) {
     g_print ("State change failed\n");
     return -2;
   }
 
-  g_timeout_add_seconds (10, (GSourceFunc) update_uri, dvbsrc);
+  g_timeout_add_seconds (20, (GSourceFunc) update_uri, dvbsrc);
   g_main_loop_run (loop);
 
   gst_element_set_state (pipeline, GST_STATE_NULL);
+  gst_bus_remove_watch (bus);
+  gst_object_unref (bus);
   gst_object_unref (pipeline);
   g_main_loop_unref (loop);
   return 0;
